@@ -82,7 +82,7 @@ describe("init_vault", () => {
     // Call init_vault
     const tx = await program.methods
       .initVault(args)
-      .accounts({
+      .accountsStrict({
         maker: maker.publicKey,
         vault: vaultPda,
         gameTokenMint: gameTokenMint,
