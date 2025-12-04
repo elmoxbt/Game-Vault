@@ -1,4 +1,5 @@
-# GameVault — On-Chain Sniper-Proof Liquidity Vault for Solana Games
+# GameVault —> 
+## On-Chain Sniper-Proof Liquidity Vault for Solana Games
 
 ## High-Level Overview
 
@@ -17,7 +18,7 @@
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-## 1. init_vault — Create the DAMM v2 Pool
+## 1. init_vault - Create the DAMM v2 Pool
 
 ```
 [Game Dev] ──► init_vault
@@ -35,7 +36,7 @@
         Vault Ready (dynamic fees, single-sided enabled)
 ```
 
-## 2. deposit — Add Liquidity with Smart Bins
+## 2. deposit - Add Liquidity with Smart Bins
 
 ```
 [LP] ──► deposit
@@ -56,7 +57,7 @@
   Mint Position NFT (user's share) + Update Leaderboard
 ```
 
-## 3. adjust_bins — Auto-Protect Against Volatility
+## 3. adjust_bins - Auto-Protect Against Volatility
 
 ```
 Anyone (or cron) ──► adjust_bins
@@ -79,7 +80,7 @@ Anyone (or cron) ──► adjust_bins
   Emit BinsAdjusted event (frontend sync)
 ```
 
-## 4. trigger_daily_war — Liquidity Wars (Daily Event)
+## 4. trigger_daily_war - Liquidity Wars (Daily Event)
 
 ```
 Anyone ──► trigger_daily_war
@@ -108,7 +109,7 @@ Distribute:
 Update Leaderboard + WarHistory PDA
 ```
 
-## 5. withdraw — Pro-Rata Exit
+## 5. withdraw - Pro-Rata Exit
 
 ```
 [LP] ──► withdraw
@@ -126,13 +127,11 @@ Transfer tokens back to user
 Burn position NFT share + update Leaderboard
 ```
 
----
-
-**All logic on-chain — zero off-chain bots**
+**All logic on-chain - zero off-chain bots**
 **DAMM v2 + Pyth = automatic sniper resistance**
 **Liquidity Wars = addictive daily yield game**
 
-GameVault doesn't just protect liquidity — it turns defense into the most engaging on-chain game in the ecosystem.
+GameVault doesn't just protect liquidity - it turns defense into the most engaging on-chain game in the ecosystem.
 
 ## Tech Stack
 
@@ -151,8 +150,6 @@ GameVault doesn't just protect liquidity — it turns defense into the most enga
 - Jupiter v6 (swaps)
 - Metaplex Bubblegum (NFT badges)
 
----
-
 ## Status
 
 ### ✅ Day 1 - Core Foundation
@@ -162,7 +159,7 @@ GameVault doesn't just protect liquidity — it turns defense into the most enga
 
 ### ✅ Day 2 - DAMM v2 + Pyth-Powered Deposits
 - Deposit instruction with Pyth-powered optimal price range
-- Volatility-based ranging: confidence → ±5%, ±15%, or ±30%
+- Volatility-based ranging: confidence to ±5%, ±15%, or ±30%
 - Q64.64 sqrt_price conversions for CP-AMM
 - UserPosition PDA initialization (first deposit only)
 - Self-contained implementation (no external deps beyond Anchor)
@@ -172,14 +169,14 @@ GameVault doesn't just protect liquidity — it turns defense into the most enga
 - **`adjust_bins` instruction** - Permissionless volatility-triggered rebalancing
 - Compares new Pyth confidence vs stored volatility
 - Triggers when volatility change >= 20%
-- Removes liquidity from old bins → adds to new optimal range
+- Removes liquidity from old bins, adds to new optimal range
 - Emits `BinsAdjustedEvent` for frontend sync
 - Added `last_bin_adjustment_timestamp` field to Vault
 - Tests passing: `init_vault`, `deposit`, `adjust_bins`
 
 **How It Protects:**
-- Calm → Volatile (300% spike): Bins auto-widen from ±5% to ±15%
-- Volatile → Calm (80% drop): Bins auto-tighten from ±30% to ±15%
+- Calm to Volatile (300% spike): Bins auto-widen from ±5% to ±15%
+- Volatile to Calm (80% drop): Bins auto-tighten from ±30% to ±15%
 - Sniper attacks during volatility automatically absorbed by wider ranges
 - Anyone can trigger (decentralized protection)
 
@@ -191,8 +188,6 @@ GameVault doesn't just protect liquidity — it turns defense into the most enga
 - Jupiter swap integration
 - Daily war trigger mechanism
 - Leaderboard + fee distribution
-
----
 
 ## Setup
 
