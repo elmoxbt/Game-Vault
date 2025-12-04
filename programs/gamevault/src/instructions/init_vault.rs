@@ -86,6 +86,7 @@ pub fn handler(ctx: Context<InitVault>, args: InitVaultArgs) -> Result<()> {
     msg!("Initial Pyth price: {}, confidence: {}", pyth_price, pyth_confidence);
 
     // Step 3: CPI to Meteora DAMM v2 - Initialize Pool
+    // DAMM v2 specific: Dynamic fees, single-sided support, programmatic bin control
     let pool_address = cpi_initialize_damm_pool(
         &ctx.accounts.maker,
         &ctx.accounts.damm_pool.to_account_info(),
@@ -97,7 +98,7 @@ pub fn handler(ctx: Context<InitVault>, args: InitVaultArgs) -> Result<()> {
         args.base_fee_bps,
     )?;
 
-    msg!("DAMM pool initialized: {}", pool_address);
+    msg!("✅ DAMM v2 pool initialized: {}", pool_address);
 
     // Step 4: Initialize Vault account fields
     vault.authority = crate::ID; // Program is authority

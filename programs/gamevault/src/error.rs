@@ -31,4 +31,16 @@ pub enum GameVaultError {
 
     #[msg("Invalid SOL mint address")]
     InvalidSolMint,
+
+    #[msg("Invalid Pyth price (must be positive)")]
+    InvalidPythPrice,
+
+    #[msg("Invalid Pyth confidence interval")]
+    InvalidPythConfidence,
+
+    #[msg("Invalid Pyth feed ID format")]
+    InvalidPythFeedId,
+
+    #[msg("User position account not found or invalid")]
+    InvalidUserPosition,
 }

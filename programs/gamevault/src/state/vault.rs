@@ -88,3 +88,36 @@ pub struct LeaderboardEntry {
     /// Number of times user won Defender of the Day
     pub defender_badge_count: u8,
 }
+
+/// UserPosition Account - Tracks individual LP position in vault
+/// PDA Seeds: ["position", vault, user]
+#[account]
+#[derive(InitSpace)]
+pub struct UserPosition {
+    /// Which vault this position belongs to
+    pub vault: Pubkey,
+
+    /// User who owns this position
+    pub user: Pubkey,
+
+    /// Meteora DAMM v2 position NFT address
+    pub damm_position_nft: Pubkey,
+
+    /// Vault shares owned (for pro-rata withdrawals)
+    pub shares: u64,
+
+    /// Total deposited value in USD (8 decimals)
+    pub total_deposited_usd: u64,
+
+    /// Timestamp of first deposit (for leaderboard scoring)
+    pub first_deposit_timestamp: i64,
+
+    /// Timestamp of last deposit
+    pub last_deposit_timestamp: i64,
+
+    /// Accumulated fees earned (in game tokens)
+    pub fees_earned: u64,
+
+    /// PDA bump seed
+    pub bump: u8,
+}

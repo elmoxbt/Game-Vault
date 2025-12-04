@@ -13,11 +13,19 @@ use instructions::*;
 pub mod gamevault {
     use super::*;
 
-    /// Initialize a new GameVault with Meteora DAMM pool
+    /// Initialize a new GameVault with Meteora DAMM v2 pool
     pub fn init_vault(
         ctx: Context<InitVault>,
         args: InitVaultArgs,
     ) -> Result<()> {
         instructions::init_vault::handler(ctx, args)
+    }
+
+    /// Deposit liquidity into vault with Pyth-powered optimal bin placement
+    pub fn deposit(
+        ctx: Context<Deposit>,
+        args: DepositArgs,
+    ) -> Result<()> {
+        instructions::deposit::handler(ctx, args)
     }
 }
