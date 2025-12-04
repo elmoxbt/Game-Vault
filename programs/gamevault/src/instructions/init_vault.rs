@@ -108,7 +108,7 @@ pub fn handler(ctx: Context<InitVault>, args: InitVaultArgs) -> Result<()> {
     vault.total_shares = 0; // No LPs yet
     vault.last_pyth_price = pyth_price;
     vault.last_pyth_confidence = pyth_confidence;
-    vault.last_bin_adjustment = clock.unix_timestamp;
+    vault.last_bin_adjustment_timestamp = clock.unix_timestamp;
     vault.bump = ctx.bumps.vault;
 
     // Step 5: Emit event

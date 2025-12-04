@@ -136,7 +136,7 @@ GameVault doesn't just protect liquidity — it turns defense into the most enga
 
 ## Tech Stack
 
-### Current (Day 2)
+### Current (Day 3)
 - **Anchor 0.30.1** - Smart contract framework
 - **anchor-spl 0.30.1** - SPL token integration
 - **Meteora CP-AMM DAMM v2** - Self-contained integration (CPIs mocked)
@@ -144,12 +144,53 @@ GameVault doesn't just protect liquidity — it turns defense into the most enga
   - Reference: Cloned repo at `./meteora-cp-amm/`
 - **Pyth Oracle** - Price + volatility (mocked: $1.00, $0.01 confidence)
 
-### Planned (Day 3+)
+### Planned (Day 4+)
 - Real Meteora CP-AMM CPI integration
 - Real Pyth oracle integration
 - Switchboard VRF (randomness)
 - Jupiter v6 (swaps)
 - Metaplex Bubblegum (NFT badges)
+
+---
+
+## Status
+
+### ✅ Day 1 - Core Foundation
+- Vault initialization with DAMM v2 pool creation
+- State accounts: Vault, UserPosition, War, Leaderboard
+- Tests passing: `init_vault`
+
+### ✅ Day 2 - DAMM v2 + Pyth-Powered Deposits
+- Deposit instruction with Pyth-powered optimal price range
+- Volatility-based ranging: confidence → ±5%, ±15%, or ±30%
+- Q64.64 sqrt_price conversions for CP-AMM
+- UserPosition PDA initialization (first deposit only)
+- Self-contained implementation (no external deps beyond Anchor)
+- Tests passing: `init_vault`, `deposit`
+
+### ✅ Day 3 - Auto Bin Adjustment (The Sniper Killer)
+- **`adjust_bins` instruction** - Permissionless volatility-triggered rebalancing
+- Compares new Pyth confidence vs stored volatility
+- Triggers when volatility change >= 20%
+- Removes liquidity from old bins → adds to new optimal range
+- Emits `BinsAdjustedEvent` for frontend sync
+- Added `last_bin_adjustment_timestamp` field to Vault
+- Tests passing: `init_vault`, `deposit`, `adjust_bins`
+
+**How It Protects:**
+- Calm → Volatile (300% spike): Bins auto-widen from ±5% to ±15%
+- Volatile → Calm (80% drop): Bins auto-tighten from ±30% to ±15%
+- Sniper attacks during volatility automatically absorbed by wider ranges
+- Anyone can trigger (decentralized protection)
+
+### 🚧 Day 4+ - Real Integration + Liquidity Wars
+- Add `add_to_position` instruction (subsequent deposits)
+- Implement real Meteora CP-AMM CPI calls
+- Implement real Pyth oracle integration
+- Switchboard VRF integration
+- Jupiter swap integration
+- Daily war trigger mechanism
+- Leaderboard + fee distribution
 
 ---
 
@@ -169,6 +210,12 @@ anchor test --skip-build -- --tests init_vault
 
 # Test deposit (first deposit only)
 anchor test --skip-build -- --tests deposit
+
+# Test adjust_bins (sniper killer)
+anchor test --skip-build -- --tests adjust_bins
+
+# Run all tests
+anchor test --skip-build
 
 # Deploy to devnet
 anchor deploy --provider.cluster devnet

@@ -28,4 +28,12 @@ pub mod gamevault {
     ) -> Result<()> {
         instructions::deposit::handler(ctx, args)
     }
+
+    /// Adjust bins based on volatility changes (sniper-killer)
+    /// Anyone can call this to trigger rebalancing when volatility changes > 20%
+    pub fn adjust_bins(
+        ctx: Context<AdjustBins>,
+    ) -> Result<()> {
+        instructions::adjust_bins::handler(ctx)
+    }
 }

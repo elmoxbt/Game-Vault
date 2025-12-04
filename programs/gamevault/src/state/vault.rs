@@ -27,7 +27,7 @@ pub struct Vault {
     pub last_pyth_confidence: u64,
 
     /// Timestamp of last adjust_bins call
-    pub last_bin_adjustment: i64,
+    pub last_bin_adjustment_timestamp: i64,
 
     /// PDA bump seed
     pub bump: u8,

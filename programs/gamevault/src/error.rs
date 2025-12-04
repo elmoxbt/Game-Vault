@@ -14,6 +14,9 @@ pub enum GameVaultError {
     #[msg("Confidence interval change below adjustment threshold")]
     NoBinAdjustmentNeeded,
 
+    #[msg("Volatility change insufficient for bin adjustment (< 20%)")]
+    VolatilityChangeInsufficient,
+
     #[msg("Insufficient vault balance for withdrawal")]
     InsufficientBalance,
 
