@@ -4,7 +4,7 @@
 ## User Story: GameVault – The Shield Every Solana Game Deserves
 
 ### Title
-"As a Solana game studio launching a new token and in-game economy, I want my liquidity to be automatically protected from sniper bots and price crashes so that our community can trade fairly and the project survives the first 48 hours."
+As a Solana game studio launching a new token and in-game economy, I want my liquidity to be automatically protected from sniper bots and price crashes so that our community can trade fairly and the project survives the first 48 hours.
 
 ### Persona
 **Name:** Maya
@@ -66,7 +66,9 @@ Nexus Raiders survives launch week, retains its community, and becomes the case 
 ### One-liner that Maya tweets after launch
 > "GameVault turned our liquidity from a liability into a daily competitive game that prints yield and shields us from bots. Every Solana game needs this yesterday."
 
-## High-Level Overview
+## Architectural Diagram
+
+### High-Level Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -83,7 +85,7 @@ Nexus Raiders survives launch week, retains its community, and becomes the case 
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-## 1. init_vault - Create the DAMM v2 Pool
+### 1. init_vault - Create the DAMM v2 Pool
 
 ```
 [Game Dev] ──► init_vault
@@ -101,7 +103,7 @@ Nexus Raiders survives launch week, retains its community, and becomes the case 
         Vault Ready (dynamic fees, single-sided enabled)
 ```
 
-## 2. deposit - Add Liquidity with Smart Bins
+### 2. deposit - Add Liquidity with Smart Bins
 
 ```
 [LP] ──► deposit
@@ -122,7 +124,7 @@ Nexus Raiders survives launch week, retains its community, and becomes the case 
   Mint Position NFT (user's share) + Update Leaderboard
 ```
 
-## 3. adjust_bins - Auto-Protect Against Volatility
+### 3. adjust_bins - Auto-Protect Against Volatility
 
 ```
 Anyone (or cron) ──► adjust_bins
@@ -145,7 +147,7 @@ Anyone (or cron) ──► adjust_bins
   Emit BinsAdjusted event (frontend sync)
 ```
 
-## 4. trigger_daily_war - Liquidity Wars (Daily Event)
+### 4. trigger_daily_war - Liquidity Wars (Daily Event)
 
 ```
 Anyone ──► trigger_daily_war
@@ -174,7 +176,7 @@ Distribute:
 Update Leaderboard + WarHistory PDA
 ```
 
-## 5. withdraw - Pro-Rata Exit
+### 5. withdraw - Pro-Rata Exit
 
 ```
 [LP] ──► withdraw
