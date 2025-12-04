@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-/// WarHistory Account - Circular buffer of last 30 wars
+/// WarHistory Account - Tracks war statistics
 /// PDA Seeds: ["war_history", vault]
 #[account]
 #[derive(InitSpace)]
@@ -8,9 +8,14 @@ pub struct WarHistory {
     /// Which vault this history tracks
     pub vault: Pubkey,
 
-    /// Last 30 wars, FIFO circular buffer
-    #[max_len(30)]
-    pub wars: Vec<WarRecord>,
+    /// Timestamp of last war
+    pub last_war_timestamp: i64,
+
+    /// Total number of wars executed
+    pub total_wars: u64,
+
+    /// Total fees distributed across all wars
+    pub total_fees_distributed: u64,
 
     /// PDA bump seed
     pub bump: u8,

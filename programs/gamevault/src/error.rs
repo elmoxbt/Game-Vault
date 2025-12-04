@@ -46,4 +46,7 @@ pub enum GameVaultError {
 
     #[msg("User position account not found or invalid")]
     InvalidUserPosition,
+
+    #[msg("Invalid attack size (must be 5-50%)")]
+    InvalidAttackSize,
 }

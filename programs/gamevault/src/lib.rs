@@ -36,4 +36,13 @@ pub mod gamevault {
     ) -> Result<()> {
         instructions::adjust_bins::handler(ctx)
     }
+
+    /// Trigger daily liquidity war (permissionless)
+    /// Executes random attack swap and distributes fees
+    pub fn trigger_daily_war(
+        ctx: Context<TriggerDailyWar>,
+        args: TriggerDailyWarArgs,
+    ) -> Result<()> {
+        instructions::trigger_daily_war::handler(ctx, args)
+    }
 }
