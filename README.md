@@ -1,124 +1,179 @@
-# GameVault
+# GameVault — On-Chain Sniper-Proof Liquidity Vault for Solana Games
 
-**The first on-chain sniper-resistant dynamic liquidity vault for Solana gaming economies**
+## High-Level Overview
 
-## What It Does
-GameVault uses Meteora DAMM v2 + Pyth oracles to automatically protect game token liquidity from bot attacks, while turning defense into a daily competitive game via "Liquidity Wars".
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│ GameVault Program (Anchor/Rust)                                     │
+│                                                                     │
+│ Integrates:                                                         │
+│  • Meteora DAMM v2 (CPI)                                            │
+│  • Pyth Pull Oracle (price + confidence)                            │
+│  • Switchboard VRF (randomness)                                     │
+│  • Jupiter v6 (attack swaps)                                        │
+│  • Metaplex Bubblegum (compressed Defender NFT)                     │
+│                                                                     │
+│ State (PDAs): Vault • Config • Leaderboard • WarHistory             │
+└─────────────────────────────────────────────────────────────────────┘
+```
 
-## Architecture
-[Overall Title: GameVault Protocol Architecture]
-[Blue Border - High-Level Overview]
-┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ GameVault Program (Anchor/Rust) ── Integrations: Meteora DAMM v2 (CPI), Pyth Oracle (Pull),      │
-│ Switchboard VRF (Randomness), Jupiter (Swaps), Metaplex (NFT Badges) ── State: PDAs for Vaults,  │
-│ Leaderboards, War History ── Users: Game Devs (Init/Deposit), Players (Wars/Withdraw)            │
-└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+## 1. init_vault — Create the DAMM v2 Pool
 
-[Panel 1: Blue Border - Vault Initialization Instruction]
-┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ Create Vault Instruction (init_vault)                                                           │
-│                                                                                                 │
-│ [Maker (Game Dev Signer)] ──[Create Vault Request]───> [Vault Instruction] ──[CPI to DAMM]───>   │
-│   │                                                                    │                       │
-│   │ [Vault PDA Account] (Seeds: [game_token, program_id])               │                       │
-│   │                                                                    │                       │
-│   ↓                                                                    │                       │
-│ [Initial Liquidity Deposit] (Tokens to Vault) ──[Check SOL > 0]───> [Decision Diamond]         │
-│                                                                    │ Yes │                    │
-│                                                                    │     │                    │
-│                                                                    │     │ [DAMM Pool Created] │
-│                                                                    │     │ (Bin Arrays, Fees)  │
-│ [No] ──[Transaction Fails] <─────────────────────────────────────────┘     │                    │
-│                                                                    │     │                    │
-│                                                                    │     │ [Pyth Price Fetch] ──[Store Initial Price/Vol] ──> [Vault Ready] │
-└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+[Game Dev] ──► init_vault
+                │
+                ▼
+        Create Vault PDA (seed: [game_token, program_id])
+                │
+                ▼
+        CPI → Meteora DAMM v2: InitializePool
+                │
+                ▼
+        Pyth Pull → Store initial price + confidence
+                │
+                ▼
+        Vault Ready (dynamic fees, single-sided enabled)
+```
 
-[Panel 2: Purple Border - Deposit & Liquidity Allocation Instruction]
-┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ Deposit Instruction (deposit)                                                                   │
-│                                                                                                 │
-│ [User (LP Signer)] ──[Deposit Request]───> [Deposit Instruction] ──[CPI to SPL Token]───>       │
-│   │                                                                    │                       │
-│   │ [User's Token Account] (ATA)                                      │                       │
-│   │                                                                    │                       │
-│   ↓                                                                    │                       │
-│ [Transfer Tokens to Vault PDA] ──[Validate Amount > Min]───> [Decision Diamond]                 │
-│                                                                    │ Yes │                    │
-│                                                                    │     │                    │
-│                                                                    │     │ [Pyth Pull Oracle] ──[Get Price + Confidence Interval] ──> [Calculate Optimal Bins] │
-│ [No] ──[Transaction Reverts] <───────────────────────────────────────┘     │                    │
-│                                                                    │     │                    │
-│                                                                    │     │ [CPI to DAMM: Add Liquidity to Bins] ──> [Position NFT Minted (User Share)] │
-│                                                                    │     │                    │
-│                                                                    │     │ [Update Leaderboard PDA (Time-Weighted Share)]                          │
-└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+## 2. deposit — Add Liquidity with Smart Bins
 
-[Panel 3: Orange Border - Bin Adjustment (Auto-Protection) Instruction]
-┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ Adjust Bins Instruction (adjust_bins) - Triggered on Deposit or Cron                            │
-│                                                                                                 │
-│ [Vault Authority (Program)] ──[Adjustment Trigger]───> [Adjust Instruction] ──[CPI to DAMM]───> │
-│   │                                                                    │                        │
-│   │ [Vault PDA Account] (Current Bins/Vol Data)                        │                        │
-│   │                                                                    │                        │
-│   ↓                                                                    │                        │
-│ [Pyth Oracle Pull] ──[Fetch Latest Price/Confidence]───> [Decision Diamond]                     │
-│                                                                    │ Vol Spike? │               │
-│                                                                    │ (Conf > Threshold) │       │
-│ [Staleness Check Fail] ──[Revert] <─────────────────────────────────── No ──> [No Change]       │
-│                                                                    │     │                      │  
-│                                                                    │     │ [Calculate New Bin Range] (e.g., ±Vol*2) │
-│                                                                    │     │                    │
-│                                                                    │ Yes │                    │
-│                                                                    │     │ [CPI to DAMM: Remove Old Liquidity] ──> [Add to New Bins] ──> [Vault Updated] │
-│                                                                    │     │                    │
-│                                                                    │     │ [Emit Event for Frontend Sync]                                      │
-└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+[LP] ──► deposit
+          │
+          ▼
+  Transfer tokens → Vault PDA
+          │
+          ▼
+  Pyth Pull → Get price + confidence interval
+          │
+          ▼
+  Calculate optimal bin range (± confidence × factor)
+          │
+          ▼
+  CPI → DAMM v2: AddLiquidity (to calculated bins)
+          │
+          ▼
+  Mint Position NFT (user's share) + Update Leaderboard
+```
 
-[Panel 4: Green Border - Liquidity Wars & Withdraw Instruction]
-┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ Liquidity Wars (trigger_daily_war) + Withdraw (withdraw)                                       │
-│                                                                                                 │
-│ [Anyone (Trigger Signer)] ──[War Trigger (Post-Cooldown)]───> [War Instruction] ──[CPI to VRF]──>│
-│   │                                                                    │                       │
-│   │ [War History PDA] (Last 24h Check)                                 │                       │
-│   │                                                                    │                       │
-│   ↓                                                                    │                       │
-│ [Switchboard VRF Randomness] ──[Generate Attack Size (5-50%)]───> [Decision Diamond]           │
-│                                                                    │ Cooldown OK? │            │   
-│ [No] ──[Revert] <───────────────────────────────────────────────────── No ──> [Fail Tx]        │
-│                                                                    │     │                     │
-│                                                                    │ Yes │                     │
-│                                                                    │     │ [CPI to Jupiter: Execute Attack Swap] ──> [Measure Slippage Absorbed] │
-│                                                                    │     │                    │
-│                                                                    │     │ [Distribute Fees: Top 10 LPs (70%) + Defender NFT] ──> [Update Leaderboard] │
-│                                                                    │     │                    │
-│ [Withdraw Flow] ──[User Request]───> [Pro-Rata Shares + Accrued] ──[CPI to SPL]───> [Tokens Out] │
-│                                                                    │     │ [Cleanup PDAs if Empty]                                             │
-└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+## 3. adjust_bins — Auto-Protect Against Volatility
 
-[Footer Notes]
-- Arrows: Solid = Data Flow; Dashed = Optional CPI; Red = Failure Paths
-- Shapes: Rectangles = Accounts/Instructions; Diamonds = Decisions
-- Colors: Simulated borders match original (Blue=Init, Purple=Deposit, Orange=Adjust, Green=Wars/Withdraw)
-- Total Instructions: 5 (Modular, ~600 LOC in Anchor)
-- Deployment: Solana Devnet; Frontend: React + Wallet Adapter for UX
+```
+Anyone (or cron) ──► adjust_bins
+                     │
+                     ▼
+             Pyth Pull → Latest price + confidence
+                     │
+          Confidence change > 20% ?
+               ┌── No ──► No change
+               ▼
+              Yes
+               │
+               ▼
+  CPI → DAMM v2: Remove liquidity from old bins
+               │
+               ▼
+  CPI → DAMM v2: Add liquidity to new wider/narrower bins
+               │
+               ▼
+  Emit BinsAdjusted event (frontend sync)
+```
+
+## 4. trigger_daily_war — Liquidity Wars (Daily Event)
+
+```
+Anyone ──► trigger_daily_war
+            │
+            ▼
+    24h cooldown passed?
+      ┌── No ──► Revert
+      ▼
+     Yes
+      │
+      ▼
+Switchboard VRF → Random attack size (5–50 % TVL)
+      │
+      ▼
+CPI → Jupiter v6 → Execute real attack swap
+      │
+      ▼
+Capture fees generated
+      │
+      ▼
+Distribute:
+   • 70 % → Top 10 LPs (time-weighted)
+   • 30 % → #1 Defender gets compressed NFT badge (Bubblegum)
+      │
+      ▼
+Update Leaderboard + WarHistory PDA
+```
+
+## 5. withdraw — Pro-Rata Exit
+
+```
+[LP] ──► withdraw
+          │
+          ▼
+Calculate pro-rata share + accrued fees
+          │
+          ▼
+CPI → DAMM v2: RemoveLiquidity
+          │
+          ▼
+Transfer tokens back to user
+          │
+          ▼
+Burn position NFT share + update Leaderboard
+```
+
+---
+
+**All logic on-chain — zero off-chain bots**
+**DAMM v2 + Pyth = automatic sniper resistance**
+**Liquidity Wars = addictive daily yield game**
+
+GameVault doesn't just protect liquidity — it turns defense into the most engaging on-chain game in the ecosystem.
 
 ## Tech Stack
-- Anchor 0.31.1
-- Meteora DAMM v2 SDK
-- Pyth Pull Oracles
-- Switchboard VRF
-- Jupiter v6
-- Metaplex Bubblegum
 
-## Status
-🚧 Day 0 - Initial scaffolding (Solana Student Hackathon Fall 2025)
+### Current (Day 2)
+- **Anchor 0.30.1** - Smart contract framework
+- **anchor-spl 0.30.1** - SPL token integration
+- **Meteora CP-AMM DAMM v2** - Self-contained integration (CPIs mocked)
+  - Program ID: `cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG`
+  - Reference: Cloned repo at `./meteora-cp-amm/`
+- **Pyth Oracle** - Price + volatility (mocked: $1.00, $0.01 confidence)
+
+### Planned (Day 3+)
+- Real Meteora CP-AMM CPI integration
+- Real Pyth oracle integration
+- Switchboard VRF (randomness)
+- Jupiter v6 (swaps)
+- Metaplex Bubblegum (NFT badges)
+
+---
 
 ## Setup
+
 ```bash
-anchor build
-anchor test
+# Build
+anchor build --no-idl
+
+# Generate IDL (run from program directory)
+cd programs/gamevault
+RUSTUP_TOOLCHAIN=nightly-2025-04-01 anchor idl build -o ../../target/idl/gamevault.json -t ../../target/types/gamevault.ts
+cd ../..
+
+# Test vault initialization
+anchor test --skip-build -- --tests init_vault
+
+# Test deposit (first deposit only)
+anchor test --skip-build -- --tests deposit
+
+# Deploy to devnet
+anchor deploy --provider.cluster devnet
 ```
+
+**Hackathon:** Solana Student Hackathon Fall 2025 (14-day build)
 
 Devnet Program: `[will update after first deploy]`
