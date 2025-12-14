@@ -49,4 +49,31 @@ pub enum GameVaultError {
 
     #[msg("Invalid attack size (must be 5-50%)")]
     InvalidAttackSize,
+
+    #[msg("War not scheduled for current time (±5 minutes tolerance)")]
+    WarNotScheduled,
+
+    #[msg("Bonus war cooldown active (60s required)")]
+    BonusWarCooldownActive,
+
+    #[msg("Insufficient bonus war fee (0.05 SOL required)")]
+    InsufficientBonusWarFee,
+
+    #[msg("Vault TVL below minimum threshold (100 SOL required)")]
+    InsufficientVaultTVL,
+
+    #[msg("Arithmetic overflow detected")]
+    ArithmeticOverflow,
+
+    #[msg("Unauthorized: Only vault authority can call this instruction")]
+    Unauthorized,
+
+    #[msg("Excessive bin shift: Max 30% change per call")]
+    ExcessiveBinShift,
+
+    #[msg("Adjust cooldown active (5 minutes required)")]
+    AdjustCooldown,
+
+    #[msg("Insufficient fee for manual adjust_bins (0.01 SOL required)")]
+    SpamFee,
 }

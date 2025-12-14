@@ -4,12 +4,13 @@ use crate::state::*;
 use crate::error::GameVaultError;
 use crate::utils::{
     fetch_pyth_price,
-    cpi_add_liquidity_damm,
     calculate_price_range_from_volatility,
     price_to_sqrt_price,
+    cpi_add_liquidity_damm,
 };
 
 #[derive(Accounts)]
+#[instruction(args: DepositArgs)]
 pub struct Deposit<'info> {
     /// User depositing liquidity
     #[account(mut)]
@@ -32,6 +33,16 @@ pub struct Deposit<'info> {
         bump
     )]
     pub user_position: Account<'info, UserPosition>,
+
+    /// Leaderboard PDA
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = 8 + Leaderboard::INIT_SPACE,
+        seeds = [b"leaderboard", vault.key().as_ref()],
+        bump
+    )]
+    pub leaderboard: Account<'info, Leaderboard>,
 
     /// Meteora DAMM v2 CP-AMM pool
     /// CHECK: Pool account from cloned Meteora repo
@@ -99,56 +110,41 @@ pub fn handler(ctx: Context<Deposit>, args: DepositArgs) -> Result<()> {
     let user_position = &mut ctx.accounts.user_position;
     let clock = Clock::get()?;
 
-    msg!("🔵 DEPOSIT - DAMM v2 (CP-AMM) with Pyth-powered price range");
+    msg!("💰 DEPOSIT - LP Signer");
+    msg!("  LP: {}", ctx.accounts.user.key());
 
-    // Step 1: Validate deposit amounts
+    // Step 1: Transfer tokens → Vault PDA (validate amount > min)
     require!(
         args.game_token_amount > 0 || args.sol_amount > 0,
         GameVaultError::DepositTooSmall
     );
 
-    msg!("  Game tokens: {}", args.game_token_amount);
-    msg!("  SOL: {}", args.sol_amount);
+    msg!("  ✅ Amount validated (> min)");
+    msg!("     Game tokens: {}", args.game_token_amount);
+    msg!("     SOL: {}", args.sol_amount);
 
-    // Step 2: Fetch current Pyth price and confidence (volatility proxy)
+    // Step 2: Pyth Pull → Current price + confidence interval
     let (pyth_price, pyth_confidence) = fetch_pyth_price(
         &ctx.accounts.pyth_price_feed.to_account_info(),
         &clock,
     )?;
 
-    msg!("  Pyth price: ${}", pyth_price as f64 / 1e8);
-    msg!("  Pyth confidence: ${}", pyth_confidence as f64 / 1e8);
+    msg!("  ✅ Pyth pulled: ${}", pyth_price as f64 / 1e8);
+    msg!("     Confidence: ${}", pyth_confidence as f64 / 1e8);
 
-    // Step 3: Calculate optimal price range based on Pyth confidence (volatility)
-    // DAMM v2 CP-AMM uses sqrt_price instead of discrete bins
-    // Convert Pyth price to sqrt_price (Q64.64 format)
-    let current_price = pyth_price as f64 / 1e8; // Normalize to regular price
+    // Step 3: Calculate optimal bin range (± confidence × factor)
+    let current_price = pyth_price as f64 / 1e8;
     let current_sqrt_price = price_to_sqrt_price(current_price);
-
-    msg!("  Current sqrt_price: {}", current_sqrt_price);
-
-    // Calculate price range bounds based on volatility
     let (sqrt_price_lower, sqrt_price_upper) = calculate_price_range_from_volatility(
         current_sqrt_price,
         pyth_price,
         pyth_confidence,
     );
 
-    msg!("  Price range: [{}, {}]", sqrt_price_lower, sqrt_price_upper);
+    msg!("  ✅ Optimal bin range calculated");
+    msg!("     Range: [{}, {}]", sqrt_price_lower, sqrt_price_upper);
 
-    // Step 4: Transfer tokens from user to pool vaults
-    // Note: In real Meteora integration, this is handled by add_liquidity CPI
-    // For Day 2, we're just tracking the deposits
-    if args.game_token_amount > 0 {
-        msg!("  ✓ Game tokens ready for deposit: {}", args.game_token_amount);
-    }
-
-    if args.sol_amount > 0 {
-        msg!("  ✓ SOL ready for deposit: {}", args.sol_amount);
-    }
-
-    // Step 5: CPI to Meteora DAMM v2 (CP-AMM) - Add Liquidity
-    // Using cpi_add_liquidity_damm from meteora.rs (mocked for Day 2)
+    // Step 4: CPI → DAMM v2: AddLiquidity (to calculated bins)
     let shares_minted = cpi_add_liquidity_damm(
         &ctx.accounts.user,
         &ctx.accounts.damm_pool.to_account_info(),
@@ -157,18 +153,52 @@ pub fn handler(ctx: Context<Deposit>, args: DepositArgs) -> Result<()> {
         &ctx.accounts.vault_a.to_account_info(),
         &ctx.accounts.vault_b.to_account_info(),
         &ctx.accounts.position.to_account_info(),
-        &ctx.accounts.meteora_damm_program.to_account_info(),
+        &ctx.accounts.position.to_account_info(),
         &ctx.accounts.token_program.to_account_info(),
+        &ctx.accounts.token_program.to_account_info(),
+        &ctx.accounts.meteora_damm_program.to_account_info(),
         args.game_token_amount,
         args.sol_amount,
-        current_sqrt_price,
-        pyth_confidence,
+        sqrt_price_lower,
+        sqrt_price_upper,
     )?;
 
-    msg!("  ✓ Liquidity added to DAMM v2 pool");
-    msg!("  Shares minted: {}", shares_minted);
+    msg!("  ✅ Liquidity added to DAMM v2 bins");
+    msg!("     Shares minted: {}", shares_minted);
 
-    // Step 6: Initialize or update user position
+    // Step 5: Update Leaderboard PDA (time-weighted share)
+    let leaderboard = &mut ctx.accounts.leaderboard;
+
+    // Initialize leaderboard if first time (init_if_needed)
+    if leaderboard.vault == Pubkey::default() {
+        leaderboard.vault = vault.key();
+        leaderboard.top_10 = Vec::new();
+        leaderboard.total_lps = 0;
+        leaderboard.last_update_timestamp = clock.unix_timestamp;
+        leaderboard.bump = ctx.bumps.leaderboard;
+    }
+
+    let total_liquidity = args.game_token_amount.saturating_add(args.sol_amount);
+    let in_top_10 = leaderboard.update_entry(
+        ctx.accounts.user.key(),
+        total_liquidity as i64,
+        clock.unix_timestamp,
+    )?;
+
+    msg!("  ✅ Leaderboard updated (time-weighted)");
+    if in_top_10 {
+        msg!("     🏆 LP entered top 10!");
+    }
+
+    // Emit LeaderboardUpdated event for frontend sync
+    emit!(crate::state::LeaderboardUpdated {
+        vault: vault.key(),
+        top_10_users: leaderboard.top_10.iter().map(|e| e.user).collect(),
+        top_10_scores: leaderboard.top_10.iter().map(|e| e.score).collect(),
+        timestamp: clock.unix_timestamp,
+    });
+
+    // Internal: Update user position tracking
     let is_first_deposit = user_position.shares == 0;
 
     if is_first_deposit {
@@ -179,19 +209,14 @@ pub fn handler(ctx: Context<Deposit>, args: DepositArgs) -> Result<()> {
         user_position.first_deposit_timestamp = clock.unix_timestamp;
         user_position.last_deposit_timestamp = clock.unix_timestamp;
         user_position.fees_earned = 0;
-
-        // Store the bump - set correctly by init
         user_position.bump = ctx.bumps.user_position;
 
-        // Calculate USD value of deposit
         let usd_value = calculate_usd_value(
             args.game_token_amount,
             args.sol_amount,
             pyth_price,
         );
         user_position.total_deposited_usd = usd_value;
-
-        msg!("  🆕 First deposit - position created");
     } else {
         user_position.shares = user_position.shares
             .checked_add(shares_minted)
@@ -208,11 +233,9 @@ pub fn handler(ctx: Context<Deposit>, args: DepositArgs) -> Result<()> {
             .ok_or(GameVaultError::MathOverflow)?;
 
         user_position.last_deposit_timestamp = clock.unix_timestamp;
-
-        msg!("  ♻️ Additional deposit - position updated");
     }
 
-    // Step 7: Update vault state
+    // Internal: Update vault state
     vault.total_shares = vault.total_shares
         .checked_add(shares_minted)
         .ok_or(GameVaultError::MathOverflow)?;
@@ -220,7 +243,7 @@ pub fn handler(ctx: Context<Deposit>, args: DepositArgs) -> Result<()> {
     vault.last_pyth_price = pyth_price;
     vault.last_pyth_confidence = pyth_confidence;
 
-    // Step 8: Emit deposit event
+    // Emit event
     emit!(DepositEvent {
         vault: vault.key(),
         user: ctx.accounts.user.key(),
@@ -233,11 +256,9 @@ pub fn handler(ctx: Context<Deposit>, args: DepositArgs) -> Result<()> {
         timestamp: clock.unix_timestamp,
     });
 
-    msg!("✅ Deposit complete");
-    msg!("   User: {}", ctx.accounts.user.key());
-    msg!("   Position shares: {}", user_position.shares);
-    msg!("   Total vault shares: {}", vault.total_shares);
-    msg!("   Total deposited USD: ${}", user_position.total_deposited_usd as f64 / 1e8);
+    msg!("✅ DEPOSIT COMPLETE");
+    msg!("   Shares: {}", shares_minted);
+    msg!("   Total vault TVL: {} shares", vault.total_shares);
 
     Ok(())
 }

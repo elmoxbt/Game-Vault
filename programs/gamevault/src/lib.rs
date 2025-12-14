@@ -1,6 +1,9 @@
+#![allow(unexpected_cfgs)]
+#![allow(deprecated)]
+
 use anchor_lang::prelude::*;
 
-declare_id!("6wTDjykpx8e2LebgR7shGFaU9Xh57aSZGXmyqgF2ctsG");
+declare_id!("9h99ZKZpprYZn2xaBEQC2R62BJCCYFMg7XEjTDzqAxk5");
 
 pub mod error;
 pub mod state;
@@ -21,6 +24,15 @@ pub mod gamevault {
         instructions::init_vault::handler(ctx, args)
     }
 
+    /// Initialize vault for testing (bypasses Meteora CPI)
+    /// ⚠️ TEST ONLY - DO NOT USE IN PRODUCTION
+    pub fn init_vault_for_testing(
+        ctx: Context<InitVaultForTesting>,
+        args: InitVaultForTestingArgs,
+    ) -> Result<()> {
+        instructions::init_vault_for_testing::handler(ctx, args)
+    }
+
     /// Deposit liquidity into vault with Pyth-powered optimal bin placement
     pub fn deposit(
         ctx: Context<Deposit>,
@@ -37,6 +49,13 @@ pub mod gamevault {
         instructions::adjust_bins::handler(ctx)
     }
 
+    /// Initialize leaderboard for a vault
+    pub fn init_leaderboard(
+        ctx: Context<InitLeaderboard>,
+    ) -> Result<()> {
+        instructions::init_leaderboard::handler(ctx)
+    }
+
     /// Trigger daily liquidity war (permissionless)
     /// Executes random attack swap and distributes fees
     pub fn trigger_daily_war(
@@ -44,5 +63,21 @@ pub mod gamevault {
         args: TriggerDailyWarArgs,
     ) -> Result<()> {
         instructions::trigger_daily_war::handler(ctx, args)
+    }
+
+    /// Withdraw liquidity from vault
+    pub fn withdraw(
+        ctx: Context<Withdraw>,
+        args: WithdrawArgs,
+    ) -> Result<()> {
+        instructions::withdraw::handler(ctx, args)
+    }
+
+    /// Withdraw treasury SOL (vault authority only)
+    pub fn withdraw_treasury(
+        ctx: Context<WithdrawTreasury>,
+        args: WithdrawTreasuryArgs,
+    ) -> Result<()> {
+        instructions::withdraw::withdraw_treasury_handler(ctx, args)
     }
 }

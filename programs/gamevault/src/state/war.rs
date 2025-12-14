@@ -17,6 +17,12 @@ pub struct WarHistory {
     /// Total fees distributed across all wars
     pub total_fees_distributed: u64,
 
+    /// Scheduled time for next war (random time in 2-hour window)
+    pub scheduled_war_time: i64,
+
+    /// Last bonus war timestamp (for 60s cooldown)
+    pub last_bonus_war: i64,
+
     /// PDA bump seed
     pub bump: u8,
 }

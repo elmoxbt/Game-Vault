@@ -17,29 +17,80 @@ pub fn fetch_pyth_price(
     msg!("  Price feed: {}", price_feed.key());
     msg!("  Current time: {}", clock.unix_timestamp);
 
-    // Mock price data for testing
-    // Real implementation would deserialize Pyth PriceUpdateV2 account
-    // Reference: pyth-solana-receiver-sdk crate (to be added Day 3+)
+    // Try to read actual price data from account (for testing)
+    let (price, confidence, publish_time) = if price_feed.data_len() >= 3200 {
+        let data = price_feed.try_borrow_data()?;
 
-    let mock_price = 100_000_000i64; // $1.00 in 8 decimals
-    let mock_confidence = 1_000_000u64; // $0.01 confidence (1% volatility)
+        // Read price data from buffer (Pyth format)
+        let price_raw = i64::from_le_bytes([
+            data[32], data[33], data[34], data[35],
+            data[36], data[37], data[38], data[39],
+        ]);
 
-    msg!("  Mock price: ${}", mock_price as f64 / 1e8);
-    msg!("  Mock confidence: ${}", mock_confidence as f64 / 1e8);
-    msg!("  Volatility: {:.2}%", (mock_confidence as f64 / mock_price as f64) * 100.0);
+        let confidence_raw = u64::from_le_bytes([
+            data[40], data[41], data[42], data[43],
+            data[44], data[45], data[46], data[47],
+        ]);
 
-    // Validate mock data
+        let exponent = i32::from_le_bytes([
+            data[48], data[49], data[50], data[51],
+        ]);
+
+        let publish_time = i64::from_le_bytes([
+            data[64], data[65], data[66], data[67],
+            data[68], data[69], data[70], data[71],
+        ]);
+
+        msg!("  Reading from Pyth account data");
+        msg!("  Raw price: {}, exponent: {}", price_raw, exponent);
+
+        // Normalize to 8 decimals
+        let normalized_price = normalize_price(price_raw, exponent);
+        let normalized_confidence = if exponent == -8 {
+            confidence_raw
+        } else {
+            let adjustment = 8i32 - exponent;
+            if adjustment > 0 {
+                confidence_raw.saturating_mul(10u64.pow(adjustment as u32))
+            } else {
+                confidence_raw.saturating_div(10u64.pow((-adjustment) as u32))
+            }
+        };
+
+        (normalized_price, normalized_confidence, publish_time)
+    } else {
+        // Fallback to hardcoded mock if account doesn't have expected data
+        msg!("  Using hardcoded mock values (account too small)");
+        (100_000_000i64, 1_000_000u64, clock.unix_timestamp)
+    };
+
+    msg!("  Price: ${}", price as f64 / 1e8);
+    msg!("  Confidence: ${}", confidence as f64 / 1e8);
+    msg!("  Volatility: {:.2}%", (confidence as f64 / price as f64) * 100.0);
+
+    // Validate staleness (max 30 seconds for adjust_bins)
+    const MAX_AGE_SECONDS: i64 = 30;
+    let age = clock.unix_timestamp.saturating_sub(publish_time);
+
     require!(
-        mock_price > 0,
+        age <= MAX_AGE_SECONDS,
+        GameVaultError::PythPriceStale
+    );
+
+    msg!("  Price age: {}s (max: {}s) ✓", age, MAX_AGE_SECONDS);
+
+    // Validate price data
+    require!(
+        price > 0,
         GameVaultError::InvalidPythPrice
     );
 
     require!(
-        mock_confidence <= mock_price as u64,
+        confidence <= price as u64,
         GameVaultError::InvalidPythConfidence
     );
 
-    Ok((mock_price, mock_confidence))
+    Ok((price, confidence))
 }
 
 /// Normalize Pyth price from arbitrary exponent to 8 decimals (USD standard)
@@ -50,7 +101,7 @@ pub fn fetch_pyth_price(
 /// Example:
 /// - Pyth: price=123456789, exponent=-8 → $1.23456789
 /// - Normalized: 123456789 (8 decimals)
-fn normalize_price(price: i64, exponent: i32) -> i64 {
+pub fn normalize_price(price: i64, exponent: i32) -> i64 {
     let target_exponent = 8i32; // Standard USD precision
     let adjustment = target_exponent - exponent;
 

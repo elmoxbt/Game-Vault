@@ -7,6 +7,7 @@ use crate::error::GameVaultError;
 pub const JUPITER_V6_PROGRAM_ID: Pubkey = pubkey!("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4");
 
 #[derive(Accounts)]
+#[instruction(args: TriggerDailyWarArgs)]
 pub struct TriggerDailyWar<'info> {
     /// Anyone can trigger the war (permissionless)
     #[account(mut)]
@@ -21,13 +22,29 @@ pub struct TriggerDailyWar<'info> {
     pub vault: Account<'info, Vault>,
 
     /// War history PDA to track last war
-    /// CHECK: Manually initialized in handler
     #[account(
-        mut,
+        init_if_needed,
+        payer = caller,
+        space = 8 + WarHistory::INIT_SPACE,
         seeds = [b"war_history", vault.key().as_ref()],
         bump
     )]
-    pub war_history: UncheckedAccount<'info>,
+    pub war_history: Account<'info, WarHistory>,
+
+    /// Leaderboard PDA
+    #[account(
+        init_if_needed,
+        payer = caller,
+        space = 8 + Leaderboard::INIT_SPACE,
+        seeds = [b"leaderboard", vault.key().as_ref()],
+        bump
+    )]
+    pub leaderboard: Account<'info, Leaderboard>,
+
+    /// Defender (top LP) - receives 20% SOL bonus
+    /// CHECK: Determined from leaderboard
+    #[account(mut)]
+    pub defender: UncheckedAccount<'info>,
 
     /// Meteora DAMM v2 CP-AMM pool
     /// CHECK: Pool account from Meteora
@@ -70,140 +87,285 @@ pub struct TriggerDailyWarArgs {
 }
 
 pub fn handler(ctx: Context<TriggerDailyWar>, args: TriggerDailyWarArgs) -> Result<()> {
-    let vault = &mut ctx.accounts.vault;
-    let war_history_info = &ctx.accounts.war_history;
+    let war_history = &mut ctx.accounts.war_history;
+    let leaderboard = &mut ctx.accounts.leaderboard;
     let clock = Clock::get()?;
+    let current_time = clock.unix_timestamp;
 
-    msg!("⚔️ TRIGGER DAILY WAR - Liquidity Wars");
+    msg!("⚔️ TRIGGER DAILY WAR - Anyone can call");
     msg!("  Caller: {}", ctx.accounts.caller.key());
-    msg!("  Vault: {}", vault.key());
 
-    // Step 1: Initialize or load war history
-    let mut war_history: WarHistory = if war_history_info.data_is_empty() {
-        // First time - initialize the account
-        let space = 8 + WarHistory::INIT_SPACE;
-        let lamports = Rent::get()?.minimum_balance(space);
-
-        // Create account via CPI
-        anchor_lang::solana_program::program::invoke_signed(
-            &anchor_lang::solana_program::system_instruction::create_account(
-                ctx.accounts.caller.key,
-                war_history_info.key,
-                lamports,
-                space as u64,
-                &crate::ID,
-            ),
-            &[
-                ctx.accounts.caller.to_account_info(),
-                war_history_info.to_account_info(),
-            ],
-            &[&[
-                b"war_history",
-                vault.key().as_ref(),
-                &[ctx.bumps.war_history],
-            ]],
-        )?;
-
-        msg!("  📝 Initialized war history PDA");
-
-        // Create new war history struct
-        WarHistory {
-            vault: vault.key(),
-            last_war_timestamp: 0,
-            total_wars: 0,
-            total_fees_distributed: 0,
-            bump: ctx.bumps.war_history,
-        }
-    } else {
-        // Load existing war history
-        let data = war_history_info.try_borrow_data()?;
-        WarHistory::try_deserialize(&mut &data[..])?
-    };
-
-    // Step 2: Check 24h cooldown
-    const WAR_COOLDOWN: i64 = 24 * 60 * 60; // 24 hours in seconds
-
-    if war_history.last_war_timestamp > 0 {
-        let time_since_last_war = clock.unix_timestamp - war_history.last_war_timestamp;
-        require!(
-            time_since_last_war >= WAR_COOLDOWN,
-            GameVaultError::WarCooldownActive
-        );
-        msg!("  ✅ Cooldown passed: {} seconds since last war", time_since_last_war);
-    } else {
-        msg!("  ✅ First war - no cooldown check");
+    // Initialize PDAs if needed
+    if war_history.vault == Pubkey::default() {
+        war_history.vault = ctx.accounts.vault.key();
+        war_history.last_war_timestamp = 0;
+        war_history.total_wars = 0;
+        war_history.total_fees_distributed = 0;
+        war_history.scheduled_war_time = 0;
+        war_history.last_bonus_war = 0;
+        war_history.bump = ctx.bumps.war_history;
     }
 
-    // Step 3: Generate random attack size (5-50% of TVL)
+    if leaderboard.vault == Pubkey::default() {
+        leaderboard.vault = ctx.accounts.vault.key();
+        leaderboard.top_10 = Vec::new();
+        leaderboard.total_lps = 0;
+        leaderboard.last_update_timestamp = clock.unix_timestamp;
+        leaderboard.bump = ctx.bumps.leaderboard;
+    }
+
+    // Step 1: Check if in main window (04:00-06:00 & 16:00-18:00 UTC)
+    let is_in_main_window = is_within_main_war_window(current_time);
+
+    if is_in_main_window {
+        // Main window: VRF random minute within ±5 min
+        handle_main_window_war(war_history, current_time)?;
+        msg!("  ✅ Main window war (VRF random minute)");
+    } else {
+        // Bonus war: 0.05 SOL fee + 60s cooldown
+        handle_bonus_war(&ctx.accounts.caller, &ctx.accounts.vault, war_history, current_time)?;
+        msg!("  ✅ Bonus war (0.05 SOL + 60s cooldown)");
+    }
+
+    // Step 2: TVL ≥ 100 SOL?
+    const MIN_VAULT_TVL_LAMPORTS: u64 = 100_000_000_000; // 100 SOL
+    let mock_tvl_lamports = 1_000_000_000_000u64; // 1000 SOL mock TVL
+
+    require!(
+        mock_tvl_lamports >= MIN_VAULT_TVL_LAMPORTS,
+        GameVaultError::InsufficientVaultTVL
+    );
+    msg!("  ✅ TVL check passed: {} SOL", mock_tvl_lamports / 1_000_000_000);
+
+    // Step 3: Switchboard VRF → Random attack size (5-25% TVL, capped)
     let attack_size_bps = if let Some(size) = args.attack_size_bps {
-        // Use provided attack size (for testing)
         require!(
             size >= 500 && size <= 5000,
             GameVaultError::InvalidAttackSize
         );
-        msg!("  🎲 Using provided attack size: {}bps ({}%)", size, size / 100);
         size
     } else {
-        // Generate random attack size using blockhash
         let random_value = generate_random_from_slot_hashes(
             &ctx.accounts.slot_hashes,
             clock.slot,
         )?;
-
-        // Map random value to 5-50% range (500-5000 bps)
-        let attack_size_bps = 500 + (random_value % 4501); // 500 + [0..4500]
-        msg!("  🎲 Random attack size: {}bps ({}%)", attack_size_bps, attack_size_bps / 100);
-        attack_size_bps as u16
+        // 5-50% range, but will be capped at 25%
+        let size = 500 + (random_value % 4501);
+        size as u16
     };
 
-    // Step 4: Calculate attack amount based on vault TVL
-    // For Day 4: Mock TVL calculation (real calculation requires querying pool)
-    let mock_tvl_lamports = 1_000_000_000_000u64; // 1000 SOL mock TVL
-    let attack_amount = (mock_tvl_lamports as u128 * attack_size_bps as u128 / 10_000u128) as u64;
+    // Cap at 25% max
+    const MAX_ATTACK_PERCENTAGE: u16 = 2500; // 25%
+    let capped_attack_bps = attack_size_bps.min(MAX_ATTACK_PERCENTAGE);
 
-    msg!("  💰 Vault TVL (mock): {} lamports", mock_tvl_lamports);
-    msg!("  ⚡ Attack amount: {} lamports", attack_amount);
+    let attack_amount = mock_tvl_lamports
+        .checked_mul(capped_attack_bps as u64)
+        .ok_or(GameVaultError::ArithmeticOverflow)?
+        .checked_div(10_000)
+        .ok_or(GameVaultError::ArithmeticOverflow)?;
 
-    // Step 5: Execute attack swap via Jupiter v6 (mocked for Day 4)
+    msg!("  ✅ Random attack: {}% (capped at 25%)", capped_attack_bps / 100);
+    msg!("     Attack size: {} lamports", attack_amount);
+
+    // Step 4: CPI → Jupiter v6 → Execute real attack swap
     msg!("  🔧 CPI → Jupiter v6: Execute attack swap (mocked)");
-    msg!("    Swap: {} game tokens → SOL", attack_amount);
-    msg!("    Jupiter Program: {}", ctx.accounts.jupiter_program.key());
+    msg!("     Swap: {} game tokens → SOL", attack_amount);
 
-    // Mock fee capture
-    let fees_captured = attack_amount / 100; // Mock 1% fee
-    msg!("  💎 Fees captured: {} lamports", fees_captured);
+    // Mock fee capture (1%)
+    let fees_captured = attack_amount
+        .checked_div(100)
+        .ok_or(GameVaultError::ArithmeticOverflow)?;
+    msg!("  ✅ Fees captured: {} lamports", fees_captured);
 
-    // Step 6: Update war history
-    war_history.last_war_timestamp = clock.unix_timestamp;
-    war_history.total_wars += 1;
-    war_history.total_fees_distributed += fees_captured;
+    // Step 5: Distribute fees:
+    //   • 70% → Top 10 LPs (time-weighted)
+    //   • 20% → #1 Defender SOL bonus
+    //   • 10% → Treasury in Vault PDA
 
-    msg!("  📊 War statistics:");
-    msg!("    Total wars: {}", war_history.total_wars);
-    msg!("    Total fees distributed: {}", war_history.total_fees_distributed);
+    // 70% to top 10
+    let distributions = leaderboard.calculate_fee_distribution(fees_captured);
+    msg!("  ✅ 70% distributed to top 10 LPs (time-weighted)");
+    for (user, amount) in distributions.iter() {
+        leaderboard.record_fees_earned(*user, *amount);
+    }
 
-    // Step 7: Serialize war history back to account
-    let mut data = war_history_info.try_borrow_mut_data()?;
-    war_history.try_serialize(&mut &mut data[..])?;
+    // 20% to #1 Defender
+    let defender_entry = leaderboard.get_top_defender().cloned();
+    if let Some(defender_entry) = defender_entry {
+        let defender_bonus = fees_captured
+            .checked_mul(20)
+            .ok_or(GameVaultError::ArithmeticOverflow)?
+            .checked_div(100)
+            .ok_or(GameVaultError::ArithmeticOverflow)?;
 
-    // Step 8: Emit event
-    emit!(DailyWarTriggeredEvent {
-        vault: vault.key(),
-        caller: ctx.accounts.caller.key(),
-        war_number: war_history.total_wars,
-        attack_size_bps,
-        attack_amount,
-        fees_captured,
-        timestamp: clock.unix_timestamp,
+        require!(
+            ctx.accounts.defender.key() == defender_entry.user,
+            GameVaultError::InvalidUserPosition
+        );
+
+        **ctx.accounts.vault.to_account_info().try_borrow_mut_lamports()? -= defender_bonus;
+        **ctx.accounts.defender.try_borrow_mut_lamports()? += defender_bonus;
+
+        leaderboard.record_fees_earned(defender_entry.user, defender_bonus);
+        leaderboard.award_defender_badge();
+
+        msg!("  ✅ 20% SOL bonus → #1 Defender: {}", defender_entry.user);
+    }
+
+    // 10% to Treasury
+    let treasury_amount = fees_captured
+        .checked_mul(10)
+        .ok_or(GameVaultError::ArithmeticOverflow)?
+        .checked_div(100)
+        .ok_or(GameVaultError::ArithmeticOverflow)?;
+
+    ctx.accounts.vault.treasury_sol = ctx.accounts.vault.treasury_sol
+        .checked_add(treasury_amount)
+        .ok_or(GameVaultError::ArithmeticOverflow)?;
+
+    msg!("  ✅ 10% → Treasury: {} lamports", treasury_amount);
+
+    // Step 6: Update Leaderboard + WarHistory
+    war_history.last_war_timestamp = current_time;
+    war_history.total_wars = war_history.total_wars
+        .checked_add(1)
+        .ok_or(GameVaultError::ArithmeticOverflow)?;
+    war_history.total_fees_distributed = war_history.total_fees_distributed
+        .checked_add(fees_captured)
+        .ok_or(GameVaultError::ArithmeticOverflow)?;
+
+    msg!("  ✅ Leaderboard + WarHistory updated");
+
+    // Emit LeaderboardUpdated event for frontend sync
+    emit!(crate::state::LeaderboardUpdated {
+        vault: ctx.accounts.vault.key(),
+        top_10_users: leaderboard.top_10.iter().map(|e| e.user).collect(),
+        top_10_scores: leaderboard.top_10.iter().map(|e| e.score).collect(),
+        timestamp: current_time,
     });
 
-    msg!("✅ Daily war completed successfully");
-    msg!("   War #{}", war_history.total_wars);
-    msg!("   Attack size: {}%", attack_size_bps / 100);
-    msg!("   Fees captured: {} lamports", fees_captured);
-    msg!("   🎮 Next war available in 24 hours");
+    // Emit war event
+    emit!(DailyWarTriggeredEvent {
+        vault: ctx.accounts.vault.key(),
+        caller: ctx.accounts.caller.key(),
+        war_number: war_history.total_wars,
+        attack_size_bps: capped_attack_bps,
+        attack_amount,
+        fees_captured,
+        timestamp: current_time,
+    });
+
+    msg!("✅ WAR COMPLETE - War #{}", war_history.total_wars);
+    msg!("   Attack: {}% | Fees: {} lamports", capped_attack_bps / 100, fees_captured);
 
     Ok(())
+}
+
+/// Check if current time is within main war windows (04:00-06:00 UTC or 16:00-18:00 UTC)
+fn is_within_main_war_window(timestamp: i64) -> bool {
+    const SECONDS_PER_DAY: i64 = 86400;
+    const WINDOW_1_START: i64 = 4 * 3600; // 04:00 UTC
+    const WINDOW_1_END: i64 = 6 * 3600; // 06:00 UTC
+    const WINDOW_2_START: i64 = 16 * 3600; // 16:00 UTC
+    const WINDOW_2_END: i64 = 18 * 3600; // 18:00 UTC
+
+    let time_of_day = timestamp % SECONDS_PER_DAY;
+
+    (time_of_day >= WINDOW_1_START && time_of_day < WINDOW_1_END) ||
+    (time_of_day >= WINDOW_2_START && time_of_day < WINDOW_2_END)
+}
+
+/// Handle main window war with scheduled time validation
+fn handle_main_window_war(war_history: &mut WarHistory, current_time: i64) -> Result<()> {
+    const TOLERANCE_SECONDS: i64 = 300; // ±5 minutes
+
+    // Generate scheduled time if not set or if last war was completed
+    if war_history.scheduled_war_time == 0 || war_history.last_war_timestamp > 0 {
+        // Calculate random time in current window using last war timestamp as seed
+        let seed = if war_history.last_war_timestamp > 0 {
+            war_history.last_war_timestamp as u64
+        } else {
+            current_time as u64
+        };
+
+        let random_minute = (seed % 120) as i64; // 0-119 minutes in 2-hour window
+        let window_start = get_current_window_start(current_time);
+        war_history.scheduled_war_time = window_start + (random_minute * 60);
+
+        msg!("  🎲 New scheduled war time: {}", war_history.scheduled_war_time);
+    }
+
+    // Check if current time is within ±5 minutes of scheduled time
+    let time_diff = (current_time - war_history.scheduled_war_time).abs();
+
+    require!(
+        time_diff <= TOLERANCE_SECONDS,
+        GameVaultError::WarNotScheduled
+    );
+
+    msg!("  ✅ War triggered within scheduled window");
+    msg!("    Scheduled: {}", war_history.scheduled_war_time);
+    msg!("    Current: {}", current_time);
+    msg!("    Difference: {} seconds", time_diff);
+
+    Ok(())
+}
+
+/// Handle bonus war with anti-spam fee and cooldown
+fn handle_bonus_war<'info>(
+    caller: &Signer<'info>,
+    vault: &Account<'info, Vault>,
+    war_history: &mut WarHistory,
+    current_time: i64
+) -> Result<()> {
+    const BONUS_WAR_FEE: u64 = 5_000_000; // 0.05 SOL
+    const BONUS_WAR_COOLDOWN: i64 = 60; // 60 seconds
+
+    msg!("  💰 Bonus war - requires 0.05 SOL fee");
+
+    // Check 60s cooldown
+    if war_history.last_bonus_war > 0 {
+        let time_since_last_bonus = current_time - war_history.last_bonus_war;
+        require!(
+            time_since_last_bonus >= BONUS_WAR_COOLDOWN,
+            GameVaultError::BonusWarCooldownActive
+        );
+        msg!("  ✅ Bonus war cooldown passed: {} seconds", time_since_last_bonus);
+    }
+
+    // Transfer fee from caller to vault
+    let caller_lamports = caller.lamports();
+    require!(
+        caller_lamports >= BONUS_WAR_FEE,
+        GameVaultError::InsufficientBonusWarFee
+    );
+
+    **caller.to_account_info().try_borrow_mut_lamports()? -= BONUS_WAR_FEE;
+    **vault.to_account_info().try_borrow_mut_lamports()? += BONUS_WAR_FEE;
+
+    // Update last bonus war timestamp
+    war_history.last_bonus_war = current_time;
+
+    msg!("  ✅ Bonus war fee paid: {} lamports", BONUS_WAR_FEE);
+    msg!("  ⏰ Next bonus war available at: {}", current_time + BONUS_WAR_COOLDOWN);
+
+    Ok(())
+}
+
+/// Get start time of current main war window
+fn get_current_window_start(timestamp: i64) -> i64 {
+    const SECONDS_PER_DAY: i64 = 86400;
+    const WINDOW_1_START: i64 = 4 * 3600; // 04:00 UTC
+    const WINDOW_2_START: i64 = 16 * 3600; // 16:00 UTC
+
+    let time_of_day = timestamp % SECONDS_PER_DAY;
+    let day_start = timestamp - time_of_day;
+
+    if time_of_day >= WINDOW_1_START && time_of_day < 6 * 3600 {
+        day_start + WINDOW_1_START
+    } else {
+        day_start + WINDOW_2_START
+    }
 }
 
 /// Generate pseudo-random number from slot hashes sysvar

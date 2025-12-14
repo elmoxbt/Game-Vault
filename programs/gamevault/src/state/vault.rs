@@ -29,6 +29,12 @@ pub struct Vault {
     /// Timestamp of last adjust_bins call
     pub last_bin_adjustment_timestamp: i64,
 
+    /// Timestamp of last adjust_bins call (5-min cooldown)
+    pub last_adjust: i64,
+
+    /// Treasury SOL accumulated from wars (10% of fees)
+    pub treasury_sol: u64,
+
     /// PDA bump seed
     pub bump: u8,
 }
@@ -55,38 +61,6 @@ pub struct Config {
 
     /// PDA bump seed
     pub bump: u8,
-}
-
-/// Leaderboard Account - Top 10 LPs by time-weighted deposits
-/// PDA Seeds: ["leaderboard", vault]
-#[account]
-#[derive(InitSpace)]
-pub struct Leaderboard {
-    /// Which vault this leaderboard tracks
-    pub vault: Pubkey,
-
-    /// Top 10 entries, sorted descending by score
-    #[max_len(10)]
-    pub entries: Vec<LeaderboardEntry>,
-
-    /// Timestamp of last war
-    pub last_war_timestamp: i64,
-
-    /// PDA bump seed
-    pub bump: u8,
-}
-
-/// Single leaderboard entry (not an account)
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, InitSpace)]
-pub struct LeaderboardEntry {
-    /// User's pubkey
-    pub user: Pubkey,
-
-    /// Time-weighted deposit score (amount × seconds staked)
-    pub score: u64,
-
-    /// Number of times user won Defender of the Day
-    pub defender_badge_count: u8,
 }
 
 /// UserPosition Account - Tracks individual LP position in vault
